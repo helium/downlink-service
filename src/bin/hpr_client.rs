@@ -1,10 +1,13 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-use helium_crypto::{Keypair, Sign, KeyTag, Network, KeyType};
-use helium_proto::{services::downlink::{
-    downlink_client::DownlinkClient, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
-}, Message};
-use serde_json::Value;
+use helium_crypto::{KeyTag, KeyType, Keypair, Network, Sign};
+use helium_proto::{
+    services::downlink::{
+        downlink_client::DownlinkClient, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
+    },
+    Message,
+};
 use rand::rngs::OsRng;
+use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[macro_use]
 extern crate log;
@@ -52,7 +55,6 @@ async fn main() -> Result {
 
     Ok(())
 }
-
 
 pub trait MsgSign: Message + std::clone::Clone {
     fn sign(&self, keypair: &Keypair) -> Result<Vec<u8>>

@@ -109,17 +109,19 @@ impl helium_proto::services::downlink::downlink_server::Downlink for State {
             Ok(b58s) => b58s.contains(&b58),
             Err(_e) => true,
         };
-        
+
         if authorized {
             match verify_req(roaming_req, public_key) {
                 Err(err) => {
                     warn!("HPR {b58} failed to verify: {err:?}");
-                    Err(tonic::Status::unauthenticated("failed singature verification"))
+                    Err(tonic::Status::unauthenticated(
+                        "failed singature verification",
+                    ))
                 }
                 Ok(_) => {
                     info!("HPR {b58} verified");
                     info!("HPR {b58} connected");
-    
+
                     tokio::spawn(async move {
                         while let Ok(body) = http_rx.recv().await {
                             info!("got donwlink {body:?} sending to {b58:?}");
@@ -130,7 +132,7 @@ impl helium_proto::services::downlink::downlink_server::Downlink for State {
                         }
                         info!("HPR {b58} disconnected");
                     });
-    
+
                     Ok(Response::new(ReceiverStream::new(rx)))
                 }
             }
@@ -138,8 +140,6 @@ impl helium_proto::services::downlink::downlink_server::Downlink for State {
             warn!("HPR {b58} unauthorized");
             Err(tonic::Status::permission_denied("unauthorized"))
         }
-
-        
     }
 }
 
