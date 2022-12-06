@@ -7,7 +7,7 @@ use helium_proto::{
 };
 use rand::rngs::OsRng;
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{time::{SystemTime, UNIX_EPOCH}, fs};
 
 #[macro_use]
 extern crate log;
@@ -23,13 +23,24 @@ async fn main() -> Result {
     let env = env_logger::Env::default().filter_or("RUST_LOG", "INFO");
     env_logger::init_from_env(env);
 
-    let keypair: Keypair = Keypair::generate(
+    let generated_keypair: Keypair = Keypair::generate(
         KeyTag {
             network: Network::MainNet,
             key_type: KeyType::Ed25519,
         },
         &mut OsRng,
     );
+    let path = "hpr_client_key.bin";
+    let keypair: Keypair =  match fs::read(path) {
+        Err(_e) => generated_keypair,
+        Ok(data) => match Keypair::try_from(&data[..]) {
+            Err(_e) => generated_keypair,
+            Ok(keypair) => keypair
+        },
+    };
+    fs::write(path, &keypair.to_vec())?;
+    let b58 = keypair.public_key().to_string();
+    info!("B58 {b58}");
 
     let mut client = DownlinkClient::connect("http://127.0.0.1:50051").await?;
 
