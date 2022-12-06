@@ -3,10 +3,8 @@ use std::{collections::HashMap, thread, time};
 #[macro_use]
 extern crate log;
 
-pub type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
-
 #[tokio::main]
-async fn main() -> Result {
+async fn main() {
     let env = env_logger::Env::default().filter_or("RUST_LOG", "INFO");
     env_logger::init_from_env(env);
 
@@ -16,7 +14,7 @@ async fn main() -> Result {
 
     info!("sending fake downlinks every {:?}", one_sec);
 
-    while counter < 100 {
+    loop {
         let mut map = HashMap::new();
 
 
@@ -40,5 +38,4 @@ async fn main() -> Result {
         counter += 1;
         thread::sleep(one_sec);
     }
-    Ok(())
 }
