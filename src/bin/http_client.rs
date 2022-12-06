@@ -12,7 +12,7 @@ async fn main() {
     let client = reqwest::Client::new();
     let mut counter = 1;
 
-    info!("sending fake downlinks every {:?}", one_sec);
+    info!("sending fake downlinks every {one_sec:?}");
 
     loop {
         let mut map = HashMap::new();
@@ -22,7 +22,7 @@ async fn main() {
         let s = counter.clone().to_string();
         map.insert("count", &s);
 
-        info!("sending payload {:?}", map);
+        info!("sending payload {map:?}");
 
         let res = client
             .post("http://127.0.0.1:3000/api/downlink")
