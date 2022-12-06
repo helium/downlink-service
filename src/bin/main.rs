@@ -73,6 +73,11 @@ async fn main() -> Result {
 
     info!("GRPC listening on {grpc_addr}");
 
+    match env::var("HPRS") {
+        Ok(b58s) => info!("Authorized keys {b58s}"),
+        Err(_e) => warn!("No keys set via `HPRS=b58,b58`"),
+    };
+
     let _ = tokio::try_join!(http_thread, grpc_thread);
 
     Ok(())
@@ -100,29 +105,41 @@ impl helium_proto::services::downlink::downlink_server::Downlink for State {
         let public_key = PublicKey::try_from(roaming_req.signer.clone()).unwrap();
         let b58 = public_key.to_string();
 
-        match verify_req(roaming_req, public_key) {
-            Err(err) => {
-                warn!("HPR {b58} failed to verify: {err:?}");
-                Err(tonic::Status::unauthenticated("failed verification"))
-            }
-            Ok(_) => {
-                info!("HPR {b58} verified");
-                info!("HPR {b58} connected");
-
-                tokio::spawn(async move {
-                    while let Ok(body) = http_rx.recv().await {
-                        info!("got donwlink {body:?} sending to {b58:?}");
-                        let sending = HttpRoamingDownlinkV1 { data: body.into() };
-                        if let Err(_) = tx.send(Ok(sending)).await {
-                            break;
+        let authorized = match env::var("HPRS") {
+            Ok(b58s) => b58s.contains(&b58),
+            Err(_e) => true,
+        };
+        
+        if authorized {
+            match verify_req(roaming_req, public_key) {
+                Err(err) => {
+                    warn!("HPR {b58} failed to verify: {err:?}");
+                    Err(tonic::Status::unauthenticated("failed singature verification"))
+                }
+                Ok(_) => {
+                    info!("HPR {b58} verified");
+                    info!("HPR {b58} connected");
+    
+                    tokio::spawn(async move {
+                        while let Ok(body) = http_rx.recv().await {
+                            info!("got donwlink {body:?} sending to {b58:?}");
+                            let sending = HttpRoamingDownlinkV1 { data: body.into() };
+                            if let Err(_) = tx.send(Ok(sending)).await {
+                                break;
+                            }
                         }
-                    }
-                    info!("HPR {b58} disconnected");
-                });
-
-                Ok(Response::new(ReceiverStream::new(rx)))
+                        info!("HPR {b58} disconnected");
+                    });
+    
+                    Ok(Response::new(ReceiverStream::new(rx)))
+                }
             }
+        } else {
+            warn!("HPR {b58} unauthorized");
+            Err(tonic::Status::permission_denied("unauthorized"))
         }
+
+        
     }
 }
 
