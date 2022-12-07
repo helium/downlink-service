@@ -1,7 +1,7 @@
 use helium_crypto::{KeyTag, KeyType, Keypair, Network, Sign};
 use helium_proto::{
     services::downlink::{
-        downlink_client::DownlinkClient, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
+        http_roaming_client::HttpRoamingClient, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
     },
     Message,
 };
@@ -42,7 +42,7 @@ async fn main() -> Result {
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
-    let mut client = DownlinkClient::connect("http://127.0.0.1:50051").await?;
+    let mut client = HttpRoamingClient::connect("http://127.0.0.1:50051").await?;
 
     let mut request = HttpRoamingRegisterV1 {
         region: 1,
@@ -54,7 +54,7 @@ async fn main() -> Result {
     request.signature = request.sign(&keypair)?;
     // request.signature = vec![];
 
-    let mut stream = client.http_roaming(request).await?.into_inner();
+    let mut stream = client.stream(request).await?.into_inner();
 
     while let Ok(item) = stream.message().await {
         let s: HttpRoamingDownlinkV1 = item.unwrap();

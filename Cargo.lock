@@ -576,7 +576,7 @@ dependencies = [
 [[package]]
 name = "helium-proto"
 version = "0.1.0"
-source = "git+https://github.com/helium/proto?branch=macpie/session_key_filter#85a1e29b6dce243a3faca2b946e460e4bd76379b"
+source = "git+https://github.com/helium/proto?branch=macpie/session_key_filter#87d1d23b38e6ab980b16bbcbdb38126727aac268"
 dependencies = [
  "bytes",
  "prost",

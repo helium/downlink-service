@@ -4,7 +4,7 @@ use axum::{
 use helium_crypto::{PublicKey, Verify};
 use helium_proto::{
     services::downlink::{
-        downlink_server::DownlinkServer, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
+        http_roaming_server::HttpRoamingServer, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
     },
     Message,
 };
@@ -65,7 +65,7 @@ async fn main() -> Result {
 
     let grpc_thread = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(DownlinkServer::new(grpc_state))
+            .add_service(HttpRoamingServer::new(grpc_state))
             .serve(grpc_addr)
             .await
             .unwrap();
@@ -92,13 +92,13 @@ async fn downlink_post(state: Extension<State>, body: Bytes) -> impl IntoRespons
 }
 
 #[tonic::async_trait]
-impl helium_proto::services::downlink::downlink_server::Downlink for State {
-    type http_roamingStream = ReceiverStream<Result<HttpRoamingDownlinkV1, Status>>;
+impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for State {
+    type streamStream = ReceiverStream<Result<HttpRoamingDownlinkV1, Status>>;
 
-    async fn http_roaming(
+    async fn stream(
         &self,
         request: Request<HttpRoamingRegisterV1>,
-    ) -> Result<tonic::Response<Self::http_roamingStream>, tonic::Status> {
+    ) -> Result<tonic::Response<Self::streamStream>, tonic::Status> {
         let mut http_rx = self.sender.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let roaming_req: HttpRoamingRegisterV1 = request.into_inner();
