@@ -1,0 +1,15 @@
+
+# log settings for the application (RUST_LOG format). Default below
+log = "INFO"
+
+# Listen address for http requests. Default "0.0.0.0:80"
+http_listen = "0.0.0.0:80"
+
+# Listen address for grpc requests. Default "0.0.0.0:50051"
+grpc_listen = "0.0.0.0:50051"
+
+# Listen address for metrics requests. Default "0.0.0.0:9000"
+metrics_listen = "0.0.0.0:9000"
+
+# B58 Public key list (key1,key2), Default ""
+authorized_keys = ""

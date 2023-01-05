@@ -8,12 +8,13 @@ use helium_proto::{
     },
     Message,
 };
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use std::time::{SystemTime, UNIX_EPOCH};
 use metrics_exporter_prometheus::PrometheusBuilder;
+mod settings;
 
 #[macro_use]
 extern crate log;
@@ -27,22 +28,24 @@ struct State {
 
 #[tokio::main]
 async fn main() -> Result {
-    let env = env_logger::Env::default().filter_or("RUST_LOG", "INFO");
+    // TODO: what do I put here for path?
+    let settings = settings::Settings::new(Some("settings.toml".to_string()))?;
 
+    let env = env_logger::Env::default().filter_or("RUST_LOG", &settings.log);
     env_logger::init_from_env(env);
 
-    let endpoint = String::from("0.0.0.0:9000");
-    let socket: SocketAddr = endpoint
+    let metrics_endpoint = String::from(&settings.metrics_listen);
+    let metrics_socket: SocketAddr = metrics_endpoint
         .parse()
-        .expect("Invalid METRICS_SCRAPE_ENDPOINT value");
+        .expect("Invalid metrics_endpoint value");
 
     if let Err(e) = PrometheusBuilder::new()
-        .with_http_listener(socket)
+        .with_http_listener(metrics_socket)
         .install()
     {
         error!("Failed to install Prometheus scrape endpoint: {e}");
     } else {
-        info!("Metrics scrape endpoint listening on {endpoint}");
+        info!("Metrics scrape endpoint listening on {metrics_endpoint}");
     }
 
     let (tx, _rx) = broadcast::channel(128);
@@ -51,12 +54,10 @@ async fn main() -> Result {
         sender: sender.clone(),
     };
 
-    let http_port = match env::var("HTTP_PORT") {
-        Ok(val) => val.parse().unwrap(),
-        Err(_e) => 3000,
-    };
-
-    let http_addr = SocketAddr::from(([0, 0, 0, 0], http_port));
+    let http_endpoint = String::from(&settings.http_listen);
+    let http_socket: SocketAddr = http_endpoint
+        .parse()
+        .expect("Invalid http_endpoint value");
     let http_state = state.clone();
 
     let http_thread = tokio::spawn(async move {
@@ -64,34 +65,31 @@ async fn main() -> Result {
             .route("/api/downlink", post(downlink_post))
             .layer(Extension(http_state));
 
-        axum::Server::bind(&http_addr)
+        axum::Server::bind(&http_socket)
             .serve(app.into_make_service())
             .await
             .unwrap();
     });
-    info!("HTTP listening on {http_addr}");
+    info!("HTTP listening on {http_endpoint}");
 
-    let grpc_port = match env::var("GRPC_PORT") {
-        Ok(val) => val.parse().unwrap(),
-        Err(_e) => 50051,
-    };
-
-    let grpc_addr = SocketAddr::from(([0, 0, 0, 0], grpc_port));
+    let grpc_endpoint = String::from(&settings.grpc_listen);
+    let grpc_socket: SocketAddr = grpc_endpoint
+        .parse()
+        .expect("Invalid grpc_endpoint value");
     let grpc_state = state.clone();
 
     let grpc_thread = tokio::spawn(async move {
         tonic::transport::Server::builder()
             .add_service(HttpRoamingServer::new(grpc_state))
-            .serve(grpc_addr)
+            .serve(grpc_socket)
             .await
             .unwrap();
     });
+    info!("GRPC listening on {grpc_endpoint}");
 
-    info!("GRPC listening on {grpc_addr}");
-
-    match env::var("HPRS") {
-        Ok(b58s) => info!("Authorized keys {b58s}"),
-        Err(_e) => warn!("No keys set via `HPRS=b58,b58`"),
+    match &settings.authorized_keys.is_empty() {
+        true => warn!("No authorized_keys set"),
+        false => info!("Authorized keys {}", &settings.authorized_keys)
     };
 
     let _ = tokio::try_join!(http_thread, grpc_thread);
@@ -123,9 +121,21 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
         let public_key = PublicKey::try_from(roaming_req.signer.clone()).unwrap();
         let b58 = public_key.to_string();
 
-        let authorized = match env::var("HPRS") {
-            Ok(b58s) => b58s.contains(&b58),
-            Err(_e) => true,
+        let authorized: bool = match settings::Settings::new(Some("settings.toml".to_string())) {
+            Err(err) => {
+                warn!("failed to get authorized_keys {err:?}");
+                true
+            }
+            Ok(setting) => {
+                let contained = match &setting.authorized_keys.is_empty() {
+                    true => {
+                        info!("empty authorized_keys");
+                        true
+                    }
+                    false => setting.authorized_keys.contains(&b58)
+                };
+                contained
+            }
         };
 
         if authorized {
