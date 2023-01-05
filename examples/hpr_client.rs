@@ -9,6 +9,8 @@ use rand::rngs::OsRng;
 use serde_json::Value;
 use std::{time::{SystemTime, UNIX_EPOCH}, fs};
 
+include!("../src/settings.rs");
+
 #[macro_use]
 extern crate log;
 
@@ -42,7 +44,14 @@ async fn main() -> Result {
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
-    let mut client = HttpRoamingClient::connect("http://127.0.0.1:50051").await?;
+    let settings = Settings::new(Some("settings.toml".to_string()))?;
+    let x = settings.grpc_listen.find(":").unwrap() + 1;
+    let port = &settings.grpc_listen[x..];
+    let url = format!("http://127.0.0.1:{}", port);
+    
+    info!("connecting to {url}"); 
+
+    let mut client = HttpRoamingClient::connect(url).await?;
 
     let mut request = HttpRoamingRegisterV1 {
         region: 1,

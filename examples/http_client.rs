@@ -1,5 +1,7 @@
 use std::{collections::HashMap, thread, time};
 
+include!("../src/settings.rs");
+
 #[macro_use]
 extern crate log;
 
@@ -14,6 +16,13 @@ async fn main() {
 
     info!("sending fake downlinks every {one_sec:?}");
 
+    let settings = Settings::new(Some("settings.toml".to_string())).unwrap();
+    let x = settings.http_listen.find(":").unwrap() + 1;
+    let port = &settings.http_listen[x..];
+    let url = format!("http://127.0.0.1:{}/api/downlink", port);
+    
+    info!("connecting to {url}"); 
+
     loop {
         let mut map = HashMap::new();
 
@@ -25,7 +34,7 @@ async fn main() {
         info!("sending payload {map:?}");
 
         let res = client
-            .post("http://127.0.0.1:3000/api/downlink")
+            .post(&url)
             .json(&map)
             .send()
             .await;

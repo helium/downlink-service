@@ -87,9 +87,9 @@ async fn main() -> Result {
     });
     info!("GRPC listening on {grpc_endpoint}");
 
-    match &settings.authorized_keys.is_empty() {
-        true => warn!("No authorized_keys set"),
-        false => info!("Authorized keys {}", &settings.authorized_keys)
+    match &settings.authorized_keys {
+        None => warn!("No authorized_keys set"),
+        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys)
     };
 
     let _ = tokio::try_join!(http_thread, grpc_thread);
@@ -127,12 +127,12 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
                 true
             }
             Ok(setting) => {
-                let contained = match &setting.authorized_keys.is_empty() {
-                    true => {
+                let contained = match &setting.authorized_keys {
+                    None => {
                         info!("empty authorized_keys");
                         true
                     }
-                    false => setting.authorized_keys.contains(&b58)
+                    Some(authorized_keys) => authorized_keys.contains(&b58)
                 };
                 contained
             }

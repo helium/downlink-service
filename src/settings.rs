@@ -16,9 +16,9 @@ pub struct Settings {
     /// Listen address for metrics requests. Default "0.0.0.0:9000"
     #[serde(default = "default_metrics_listen_addr")]
     pub metrics_listen: String,
-    /// B58 Public key list (key1,key2), Default ""
-    #[serde(default = "default_authorized_keys")]
-    pub authorized_keys: String,
+    /// B58 Public key list (key1,key2) If absent a default is calculated
+    /// by application code
+    pub authorized_keys: Option<String>
 }
 
 pub fn default_log() -> String {
@@ -35,10 +35,6 @@ pub fn default_grpc_listen_addr() -> String {
 
 pub fn default_metrics_listen_addr() -> String {
     "0.0.0.0:9000".to_string()
-}
-
-pub fn default_authorized_keys() -> String {
-    "".to_string()
 }
 
 impl Settings {
