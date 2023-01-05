@@ -12,6 +12,7 @@ use std::{env, net::SocketAddr, sync::Arc};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[macro_use]
 extern crate log;
@@ -115,7 +116,7 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
                 Err(err) => {
                     warn!("HPR {b58} failed to verify: {err:?}");
                     Err(tonic::Status::unauthenticated(
-                        "failed singature verification",
+                        "failed req verification",
                     ))
                 }
                 Ok(_) => {
@@ -146,11 +147,27 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
 fn verify_req(
     mut req: HttpRoamingRegisterV1,
     public_key: PublicKey,
-) -> Result<(), helium_crypto::Error> {
-    let signature = req.signature;
+) -> Result<&'static str, &'static str> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    
+    let timestamp = u128::try_from(req.timestamp).unwrap();
+    let two_min : u128 = 2*60*1000;
 
-    req.signature = vec![];
-    let encoded = &req.encode_to_vec();
+    let result = if timestamp > now - two_min && timestamp < now + two_min {
+        let signature = req.signature;
+        req.signature = vec![];
+        let encoded = &req.encode_to_vec();
 
-    public_key.verify(encoded, &signature)
+        match public_key.verify(encoded, &signature) {
+            Err(_err) => Err("Invalid signature"),
+            Ok(_) => Ok("ok"),
+        }
+    } else {
+        Err("Invalid timestamp")
+    };
+
+    result
 }
