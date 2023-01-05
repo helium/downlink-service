@@ -42,7 +42,7 @@ async fn main() -> Result {
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
-    let mut client = HttpRoamingClient::connect("http://127.0.0.1:8280").await?;
+    let mut client = HttpRoamingClient::connect("http://127.0.0.1:50051").await?;
 
     let mut request = HttpRoamingRegisterV1 {
         region: 1,

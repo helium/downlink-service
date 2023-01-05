@@ -25,7 +25,7 @@ async fn main() {
         info!("sending payload {map:?}");
 
         let res = client
-            .post("http://127.0.0.1:8180/api/downlink")
+            .post("http://127.0.0.1:3000/api/downlink")
             .json(&map)
             .send()
             .await;

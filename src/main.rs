@@ -13,6 +13,7 @@ use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use std::time::{SystemTime, UNIX_EPOCH};
+use metrics_exporter_prometheus::PrometheusBuilder;
 
 #[macro_use]
 extern crate log;
@@ -29,6 +30,20 @@ async fn main() -> Result {
     let env = env_logger::Env::default().filter_or("RUST_LOG", "INFO");
 
     env_logger::init_from_env(env);
+
+    let endpoint = String::from("0.0.0.0:9000");
+    let socket: SocketAddr = endpoint
+        .parse()
+        .expect("Invalid METRICS_SCRAPE_ENDPOINT value");
+
+    if let Err(e) = PrometheusBuilder::new()
+        .with_http_listener(socket)
+        .install()
+    {
+        error!("Failed to install Prometheus scrape endpoint: {e}");
+    } else {
+        info!("Metrics scrape endpoint listening on {endpoint}");
+    }
 
     let (tx, _rx) = broadcast::channel(128);
     let sender = Arc::new(tx);
@@ -85,6 +100,8 @@ async fn main() -> Result {
 }
 
 async fn downlink_post(state: Extension<State>, body: Bytes) -> impl IntoResponse {
+    metrics::increment_counter!("downlink_service_http_downlink_post_hit");
+
     info!("got donwlink via http {body:?}");
     match state.sender.send(body) {
         Ok(_t) => (StatusCode::ACCEPTED, "Downlink Accepted"),
@@ -114,23 +131,28 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
         if authorized {
             match verify_req(roaming_req, public_key) {
                 Err(err) => {
+                    metrics::increment_counter!("downlink_service_grpc_verify_req_err");
                     warn!("HPR {b58} failed to verify: {err:?}");
                     Err(tonic::Status::unauthenticated(
                         "failed req verification",
                     ))
                 }
                 Ok(_) => {
+                    metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
                     info!("HPR {b58} verified");
                     info!("HPR {b58} connected");
 
                     tokio::spawn(async move {
                         while let Ok(body) = http_rx.recv().await {
+                            metrics::increment_counter!("downlink_service_grpc_downlink_hit");
+
                             info!("got donwlink {body:?} sending to {b58:?}");
                             let sending = HttpRoamingDownlinkV1 { data: body.into() };
                             if let Err(_) = tx.send(Ok(sending)).await {
                                 break;
                             }
                         }
+                        metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
                         info!("HPR {b58} disconnected");
                     });
 
@@ -138,6 +160,7 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
                 }
             }
         } else {
+            metrics::increment_counter!("downlink_service_grpc_unauthorized_req");
             warn!("HPR {b58} unauthorized");
             Err(tonic::Status::permission_denied("unauthorized"))
         }
