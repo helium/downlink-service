@@ -49,8 +49,8 @@ impl Settings {
 
         if let Some(file) = path {
             // Add optional settings file
-            builder = builder
-                .add_source(File::with_name(&file.as_ref().to_string_lossy()).required(false));
+            let filename = file.as_ref().to_str().expect("file name");
+            builder = builder.add_source(File::with_name(filename).required(false));
         }
         // Add in settings from the environment (with a prefix of APP)
         // Eg.. `MI_DEBUG=1 ./target/app` would set the `debug` key
