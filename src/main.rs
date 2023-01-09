@@ -124,7 +124,13 @@ impl http_roaming_server::HttpRoaming for State {
         let mut http_rx = self.sender.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let roaming_req: HttpRoamingRegisterV1 = request.into_inner();
-        let public_key = PublicKey::try_from(roaming_req.signer.clone()).unwrap();
+        let public_key: PublicKey = match PublicKey::try_from(roaming_req.signer.clone()) {
+            Ok(pubkey) => pubkey,
+            Err(e) => {
+                error!("could not parse pubkey {e:?}");
+                return Err(tonic::Status::permission_denied("unauthorized"));
+            }
+        };
         let b58 = public_key.to_string();
 
         let authorized = match self.settings.authorized_keys.as_ref() {
