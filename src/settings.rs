@@ -1,6 +1,7 @@
 use config::{Config, Environment, File};
 use serde::Deserialize;
 use std::path::Path;
+use std::net::SocketAddr;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
@@ -9,32 +10,32 @@ pub struct Settings {
     pub log: String,
     /// Listen address for http requests. Default "0.0.0.0:80"
     #[serde(default = "default_http_listen_addr")]
-    pub http_listen: String,
+    pub http_listen: SocketAddr,
     /// Listen address for grpc requests. Default "0.0.0.0:50051"
     #[serde(default = "default_grpc_listen_addr")]
-    pub grpc_listen: String,
+    pub grpc_listen: SocketAddr,
     /// Listen address for metrics requests. Default "0.0.0.0:9000"
     #[serde(default = "default_metrics_listen_addr")]
-    pub metrics_listen: String,
+    pub metrics_listen: SocketAddr,
     /// B58 Public key list (key1,key2) If absent a default is calculated
     /// by application code
-    pub authorized_keys: Option<String>
+    pub authorized_keys: Option<String>,
 }
 
 pub fn default_log() -> String {
     "INFO".to_string()
 }
 
-pub fn default_http_listen_addr() -> String {
-    "0.0.0.0:80".to_string()
+pub fn default_http_listen_addr() -> SocketAddr {
+    "0.0.0.0:80".parse().expect("invalid default socket addr")
 }
 
-pub fn default_grpc_listen_addr() -> String {
-    "0.0.0.0:50051".to_string()
+pub fn default_grpc_listen_addr() -> SocketAddr {
+    "0.0.0.0:50051".parse().expect("invalid default socket addr")
 }
 
-pub fn default_metrics_listen_addr() -> String {
-    "0.0.0.0:9000".to_string()
+pub fn default_metrics_listen_addr() -> SocketAddr {
+    "0.0.0.0:9000".parse().expect("invalid default socket addr")
 }
 
 impl Settings {
@@ -49,13 +50,13 @@ impl Settings {
 
         if let Some(file) = path {
             // Add optional settings file
-            builder = builder
-                .add_source(File::with_name(&file.as_ref().to_string_lossy()).required(false));
+            let filename = file.as_ref().to_str().expect("file name");
+            builder = builder.add_source(File::with_name(filename).required(false));
         }
         // Add in settings from the environment (with a prefix of APP)
         // Eg.. `MI_DEBUG=1 ./target/app` would set the `debug` key
         builder
-            .add_source(Environment::with_prefix("HDS").separator("_"))
+            .add_source(Environment::with_prefix("hds").prefix_separator("_"))
             .build()
             .and_then(|config| config.try_deserialize())
     }

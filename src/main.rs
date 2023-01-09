@@ -1,96 +1,102 @@
+use anyhow::anyhow;
 use axum::{
     body::Bytes, http::StatusCode, response::IntoResponse, routing::post, Extension, Router,
 };
+use clap::Parser;
 use helium_crypto::{PublicKey, Verify};
 use helium_proto::{
     services::downlink::{
-        http_roaming_server::HttpRoamingServer, HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
+        http_roaming_server::{self, HttpRoamingServer},
+        HttpRoamingDownlinkV1, HttpRoamingRegisterV1,
     },
     Message,
 };
-use std::{net::SocketAddr, sync::Arc};
+use metrics_exporter_prometheus::PrometheusBuilder;
+use settings::Settings;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use std::time::{SystemTime, UNIX_EPOCH};
-use metrics_exporter_prometheus::PrometheusBuilder;
+use tracing::{error, info, warn};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 mod settings;
 
-#[macro_use]
-extern crate log;
+#[derive(Debug, Parser)]
+struct Cli {
+    #[arg(short, long)]
+    config_file: Option<PathBuf>,
+}
 
 pub type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
 
 #[derive(Debug, Clone)]
 struct State {
     sender: Arc<broadcast::Sender<Bytes>>,
+    settings: Arc<settings::Settings>,
+}
+
+impl State {
+    fn with_settings(settings: Settings) -> Self {
+        let (tx, _rx) = broadcast::channel(128);
+        Self {
+            sender: Arc::new(tx),
+            settings: Arc::new(settings),
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result {
-    // TODO: what do I put here for path?
-    let settings = settings::Settings::new(Some("settings.toml".to_string()))?;
+    let cli = Cli::parse();
 
-    let env = env_logger::Env::default().filter_or("RUST_LOG", &settings.log);
-    env_logger::init_from_env(env);
+    let settings = settings::Settings::new(cli.config_file)?;
+    match &settings.authorized_keys {
+        None => warn!("No authorized_keys set"),
+        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys),
+    };
 
-    let metrics_endpoint = String::from(&settings.metrics_listen);
-    let metrics_socket: SocketAddr = metrics_endpoint
-        .parse()
-        .expect("Invalid metrics_endpoint value");
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(&settings.log))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     if let Err(e) = PrometheusBuilder::new()
-        .with_http_listener(metrics_socket)
+        .with_http_listener(settings.metrics_listen)
         .install()
     {
         error!("Failed to install Prometheus scrape endpoint: {e}");
     } else {
-        info!("Metrics scrape endpoint listening on {metrics_endpoint}");
+        info!(endpoint = %settings.metrics_listen, "Metrics listening");
     }
 
-    let (tx, _rx) = broadcast::channel(128);
-    let sender = Arc::new(tx);
-    let state = State {
-        sender: sender.clone(),
-    };
-
-    let http_endpoint = String::from(&settings.http_listen);
-    let http_socket: SocketAddr = http_endpoint
-        .parse()
-        .expect("Invalid http_endpoint value");
+    let state = State::with_settings(settings);
     let http_state = state.clone();
+    let grpc_state = state.clone();
 
     let http_thread = tokio::spawn(async move {
+        let listen = http_state.settings.http_listen;
         let app = Router::new()
             .route("/api/downlink", post(downlink_post))
             .layer(Extension(http_state));
 
-        axum::Server::bind(&http_socket)
+        axum::Server::bind(&listen)
             .serve(app.into_make_service())
             .await
             .unwrap();
     });
-    info!("HTTP listening on {http_endpoint}");
-
-    let grpc_endpoint = String::from(&settings.grpc_listen);
-    let grpc_socket: SocketAddr = grpc_endpoint
-        .parse()
-        .expect("Invalid grpc_endpoint value");
-    let grpc_state = state.clone();
+    info!(endpoint = %state.settings.http_listen, "HTTP listening");
 
     let grpc_thread = tokio::spawn(async move {
+        let listen = grpc_state.settings.grpc_listen;
         tonic::transport::Server::builder()
             .add_service(HttpRoamingServer::new(grpc_state))
-            .serve(grpc_socket)
+            .serve(listen)
             .await
             .unwrap();
     });
-    info!("GRPC listening on {grpc_endpoint}");
-
-    match &settings.authorized_keys {
-        None => warn!("No authorized_keys set"),
-        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys)
-    };
+    info!(endpoint = %state.settings.grpc_listen, "GRPC listening");
 
     let _ = tokio::try_join!(http_thread, grpc_thread);
 
@@ -108,7 +114,7 @@ async fn downlink_post(state: Extension<State>, body: Bytes) -> impl IntoRespons
 }
 
 #[tonic::async_trait]
-impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for State {
+impl http_roaming_server::HttpRoaming for State {
     type streamStream = ReceiverStream<Result<HttpRoamingDownlinkV1, Status>>;
 
     async fn stream(
@@ -118,52 +124,43 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
         let mut http_rx = self.sender.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let roaming_req: HttpRoamingRegisterV1 = request.into_inner();
-        let public_key = PublicKey::try_from(roaming_req.signer.clone()).unwrap();
+        let public_key: PublicKey = match PublicKey::try_from(roaming_req.signer.clone()) {
+            Ok(pubkey) => pubkey,
+            Err(e) => {
+                error!("could not parse pubkey {e:?}");
+                return Err(tonic::Status::permission_denied("unauthorized"));
+            }
+        };
         let b58 = public_key.to_string();
 
-        let authorized: bool = match settings::Settings::new(Some("settings.toml".to_string())) {
-            Err(err) => {
-                warn!("failed to get authorized_keys {err:?}");
-                true
-            }
-            Ok(setting) => {
-                let contained = match &setting.authorized_keys {
-                    None => {
-                        info!("empty authorized_keys");
-                        true
-                    }
-                    Some(authorized_keys) => authorized_keys.contains(&b58)
-                };
-                contained
-            }
+        let authorized = match self.settings.authorized_keys.as_ref() {
+            None => true,
+            Some(authotized_keys) => authotized_keys.contains(&b58),
         };
 
         if authorized {
             match verify_req(roaming_req, public_key) {
                 Err(err) => {
                     metrics::increment_counter!("downlink_service_grpc_verify_req_err");
-                    warn!("HPR {b58} failed to verify: {err:?}");
-                    Err(tonic::Status::unauthenticated(
-                        "failed req verification",
-                    ))
+                    warn!(b58, "failed to verify: {err:?}");
+                    Err(tonic::Status::unauthenticated("failed req verification"))
                 }
-                Ok(_) => {
+                Ok(()) => {
                     metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
-                    info!("HPR {b58} verified");
-                    info!("HPR {b58} connected");
+                    info!(b58, "verified and connected");
 
                     tokio::spawn(async move {
                         while let Ok(body) = http_rx.recv().await {
                             metrics::increment_counter!("downlink_service_grpc_downlink_hit");
 
-                            info!("got donwlink {body:?} sending to {b58:?}");
+                            info!(b58, "got downlink {body:?} sending");
                             let sending = HttpRoamingDownlinkV1 { data: body.into() };
                             if let Err(_) = tx.send(Ok(sending)).await {
                                 break;
                             }
                         }
                         metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
-                        info!("HPR {b58} disconnected");
+                        info!(b58, "disconnected");
                     });
 
                     Ok(Response::new(ReceiverStream::new(rx)))
@@ -171,36 +168,33 @@ impl helium_proto::services::downlink::http_roaming_server::HttpRoaming for Stat
             }
         } else {
             metrics::increment_counter!("downlink_service_grpc_unauthorized_req");
-            warn!("HPR {b58} unauthorized");
+            warn!(b58, "unauthorized");
             Err(tonic::Status::permission_denied("unauthorized"))
         }
     }
 }
 
-fn verify_req(
-    mut req: HttpRoamingRegisterV1,
-    public_key: PublicKey,
-) -> Result<&'static str, &'static str> {
+fn verify_req(mut req: HttpRoamingRegisterV1, public_key: PublicKey) -> Result {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis();
-    
+
     let timestamp = u128::try_from(req.timestamp).unwrap();
-    let two_min : u128 = 2*60*1000;
+    let two_min: u128 = 2 * 60 * 1000;
 
-    let result = if timestamp > now - two_min && timestamp < now + two_min {
-        let signature = req.signature;
-        req.signature = vec![];
-        let encoded = &req.encode_to_vec();
+    if timestamp < (now - two_min) {
+        return Err(anyhow!("timestamp too far in the past"));
+    }
+    if timestamp > (now + two_min) {
+        return Err(anyhow!("timestamp too far in the future"));
+    }
 
-        match public_key.verify(encoded, &signature) {
-            Err(_err) => Err("Invalid signature"),
-            Ok(_) => Ok("ok"),
-        }
-    } else {
-        Err("Invalid timestamp")
-    };
+    let signature = req.signature;
+    req.signature = vec![];
+    let encoded = &req.encode_to_vec();
 
-    result
+    public_key
+        .verify(encoded, &signature)
+        .map_err(|e| anyhow!("invalid signature: {e:?}"))
 }
