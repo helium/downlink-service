@@ -11,7 +11,7 @@ use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tracing::{info};
+use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 include!("../src/settings.rs");
@@ -24,7 +24,6 @@ fn current_timestamp() -> Result<u64> {
 
 #[tokio::main]
 async fn main() -> Result {
-
     let settings = Settings::new(Some("settings.toml".to_string()))?;
 
     tracing_subscriber::registry()
