@@ -46,7 +46,7 @@ async fn main() -> Result {
             Ok(keypair) => keypair,
         },
     };
-    fs::write(path, &keypair.to_vec())?;
+    fs::write(path, keypair.to_vec())?;
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
