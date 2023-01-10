@@ -11,11 +11,10 @@ use std::{
     fs,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tracing::{info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 include!("../src/settings.rs");
-
-#[macro_use]
-extern crate log;
 
 pub type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
 
@@ -25,8 +24,13 @@ fn current_timestamp() -> Result<u64> {
 
 #[tokio::main]
 async fn main() -> Result {
-    let env = env_logger::Env::default().filter_or("RUST_LOG", "INFO");
-    env_logger::init_from_env(env);
+
+    let settings = Settings::new(Some("settings.toml".to_string()))?;
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(&settings.log))
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     let generated_keypair: Keypair = Keypair::generate(
         KeyTag {
@@ -47,9 +51,9 @@ async fn main() -> Result {
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
-    let settings = Settings::new(Some("settings.toml".to_string()))?;
-    let x = settings.grpc_listen.find(":").unwrap() + 1;
-    let port = &settings.grpc_listen[x..];
+    let str = settings.grpc_listen.to_string();
+    let x = str.find(":").unwrap() + 1;
+    let port = &str[x..];
     let url = format!("http://127.0.0.1:{}", port);
 
     info!("connecting to {url}");
