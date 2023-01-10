@@ -51,7 +51,7 @@ async fn main() -> Result {
     info!("B58 {b58}");
 
     let str = settings.grpc_listen.to_string();
-    let x = str.find(":").unwrap() + 1;
+    let x = str.find(':').unwrap() + 1;
     let port = &str[x..];
     let url = format!("http://127.0.0.1:{}", port);
 

@@ -155,7 +155,7 @@ impl http_roaming_server::HttpRoaming for State {
 
                             info!(b58, "got downlink {body:?} sending");
                             let sending = HttpRoamingDownlinkV1 { data: body.into() };
-                            if let Err(_) = tx.send(Ok(sending)).await {
+                            if (tx.send(Ok(sending)).await).is_err() {
                                 break;
                             }
                         }
