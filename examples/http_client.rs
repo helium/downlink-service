@@ -20,12 +20,11 @@ async fn main() {
     let x = settings.http_listen.find(":").unwrap() + 1;
     let port = &settings.http_listen[x..];
     let url = format!("http://127.0.0.1:{}/api/downlink", port);
-    
-    info!("connecting to {url}"); 
+
+    info!("connecting to {url}");
 
     loop {
         let mut map = HashMap::new();
-
 
         map.insert("payload", "some random payload");
         let s = counter.clone().to_string();
@@ -33,11 +32,7 @@ async fn main() {
 
         info!("sending payload {map:?}");
 
-        let res = client
-            .post(&url)
-            .json(&map)
-            .send()
-            .await;
+        let res = client.post(&url).json(&map).send().await;
 
         match res {
             Ok(ok) => info!("got OK {}", ok.status()),

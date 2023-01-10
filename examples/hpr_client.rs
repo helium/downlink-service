@@ -7,7 +7,10 @@ use helium_proto::{
 };
 use rand::rngs::OsRng;
 use serde_json::Value;
-use std::{time::{SystemTime, UNIX_EPOCH}, fs};
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 include!("../src/settings.rs");
 
@@ -33,11 +36,11 @@ async fn main() -> Result {
         &mut OsRng,
     );
     let path = "hpr_client_key.bin";
-    let keypair: Keypair =  match fs::read(path) {
+    let keypair: Keypair = match fs::read(path) {
         Err(_e) => generated_keypair,
         Ok(data) => match Keypair::try_from(&data[..]) {
             Err(_e) => generated_keypair,
-            Ok(keypair) => keypair
+            Ok(keypair) => keypair,
         },
     };
     fs::write(path, &keypair.to_vec())?;
@@ -48,8 +51,8 @@ async fn main() -> Result {
     let x = settings.grpc_listen.find(":").unwrap() + 1;
     let port = &settings.grpc_listen[x..];
     let url = format!("http://127.0.0.1:{}", port);
-    
-    info!("connecting to {url}"); 
+
+    info!("connecting to {url}");
 
     let mut client = HttpRoamingClient::connect(url).await?;
 
