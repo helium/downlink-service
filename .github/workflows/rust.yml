@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+    tags: [ '*' ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+          override: true
+          components: clippy, rustfmt
+
+      - name: Cancel previous runs
+        uses: styfle/cancel-workflow/action@0.5.0
+        with:
+          access_token: ${{ github.token }}
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Check Formatting
+        run: cargo fmt -- --check
+
+      - name: Clippy
+        uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --release -- -Dclippy::all
+
+      - name: Run tests
+        run: cargo test -r
+
+      - name: Debian Packaging
+        run: |
+          chmod +x ./.github/scripts/make_debian.sh
+          ./.github/scripts/make_debian.sh
+
+      - name: PackageCloud Upload
+        env:
+          PACKAGECLOUD_API_KEY: ${{ secrets.PACKAGECLOUD_API_KEY }}
+        run: |
+          chmod +x ./.github/scripts/packagecloud_upload.sh
+          ./.github/scripts/packagecloud_upload.sh

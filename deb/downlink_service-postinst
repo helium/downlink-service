@@ -1,0 +1,2 @@
+# add to /usr/local/bin so it appears in path
+ln -s /opt/downlink_service/bin/downlink_service /usr/local/bin/downlink_service || true

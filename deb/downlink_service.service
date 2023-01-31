@@ -1,0 +1,22 @@
+[Unit]
+Description=downlink_service
+After=network.target
+StartLimitInterval=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/opt/downlink_service/bin/downlink_service -c /opt/downlink_service/etc/settings.toml
+User=helium
+PIDFile=/var/run/downlink_service
+Restart=always
+RestartSec=15
+WorkingDirectory=/opt/downlink_service
+
+### Remove default limits from a few important places:
+LimitNOFILE=infinity
+LimitNPROC=infinity
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
