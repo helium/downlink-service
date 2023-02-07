@@ -13,8 +13,11 @@ use helium_proto::{
 };
 use metrics_exporter_prometheus::PrometheusBuilder;
 use settings::Settings;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{path::PathBuf, sync::Arc};
+use std::{
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -50,17 +53,17 @@ impl State {
 #[tokio::main]
 async fn main() -> Result {
     let cli = Cli::parse();
-
     let settings = settings::Settings::new(cli.config_file)?;
-    match &settings.authorized_keys {
-        None => warn!("No authorized_keys set"),
-        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys),
-    };
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(&settings.log))
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    match &settings.authorized_keys {
+        None => warn!("No authorized_keys set"),
+        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys),
+    };
 
     if let Err(e) = PrometheusBuilder::new()
         .with_http_listener(settings.metrics_listen)
@@ -124,57 +127,60 @@ impl http_roaming_server::HttpRoaming for State {
         let mut http_rx = self.sender.subscribe();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let roaming_req: HttpRoamingRegisterV1 = request.into_inner();
-        let public_key: PublicKey = match PublicKey::try_from(roaming_req.signer.clone()) {
-            Ok(pubkey) => pubkey,
-            Err(e) => {
-                error!("could not parse pubkey {e:?}");
-                return Err(tonic::Status::permission_denied("unauthorized"));
+
+        match self.settings.authorized_keys.as_ref() {
+            None => {
+                tokio::spawn(async move {
+                    while let Ok(body) = http_rx.recv().await {
+                        metrics::increment_counter!("downlink_service_grpc_downlink_hit");
+
+                        info!("got downlink {body:?} sending");
+                        let sending = HttpRoamingDownlinkV1 { data: body.into() };
+                        if (tx.send(Ok(sending)).await).is_err() {
+                            break;
+                        }
+                    }
+                    metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
+                    info!("disconnected");
+                });
+
+                metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
+                info!("verified and connected (no authorized_keys set)");
+
+                Ok(Response::new(ReceiverStream::new(rx)))
             }
-        };
-        let b58 = public_key.to_string();
-
-        let authorized = match self.settings.authorized_keys.as_ref() {
-            None => true,
-            Some(authotized_keys) => authotized_keys.contains(&b58),
-        };
-
-        if authorized {
-            match verify_req(roaming_req, public_key) {
+            Some(authotized_keys) => match verify_req(roaming_req, authotized_keys.clone()) {
                 Err(err) => {
                     metrics::increment_counter!("downlink_service_grpc_verify_req_err");
-                    warn!(b58, "failed to verify: {err:?}");
+                    warn!("failed to verify: {err:?}");
                     Err(tonic::Status::unauthenticated("failed req verification"))
                 }
                 Ok(()) => {
-                    metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
-                    info!(b58, "verified and connected");
-
                     tokio::spawn(async move {
                         while let Ok(body) = http_rx.recv().await {
                             metrics::increment_counter!("downlink_service_grpc_downlink_hit");
 
-                            info!(b58, "got downlink {body:?} sending");
+                            info!("got downlink {body:?} sending");
                             let sending = HttpRoamingDownlinkV1 { data: body.into() };
                             if (tx.send(Ok(sending)).await).is_err() {
                                 break;
                             }
                         }
                         metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
-                        info!(b58, "disconnected");
+                        info!("disconnected");
                     });
+
+                    metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
+                    info!("verified and connected");
 
                     Ok(Response::new(ReceiverStream::new(rx)))
                 }
-            }
-        } else {
-            metrics::increment_counter!("downlink_service_grpc_unauthorized_req");
-            warn!(b58, "unauthorized");
-            Err(tonic::Status::permission_denied("unauthorized"))
+            },
         }
     }
 }
 
-fn verify_req(mut req: HttpRoamingRegisterV1, public_key: PublicKey) -> Result {
+fn verify_req(mut req: HttpRoamingRegisterV1, authotized_keys: String) -> Result {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -194,7 +200,26 @@ fn verify_req(mut req: HttpRoamingRegisterV1, public_key: PublicKey) -> Result {
     req.signature = vec![];
     let encoded = &req.encode_to_vec();
 
-    public_key
-        .verify(encoded, &signature)
-        .map_err(|e| anyhow!("invalid signature: {e:?}"))
+    let b58s: Vec<&str> = authotized_keys.split(",").collect();
+
+    for b58 in b58s {
+        match PublicKey::from_str(b58) {
+            Err(e) => error!("could not parse public key {b58} {e:?}"),
+            Ok(public_key) => {
+                let result = public_key
+                    .verify(encoded, &signature)
+                    .map_err(|e| anyhow!("invalid signature: {e:?}"));
+
+                match result {
+                    Err(e) => {
+                        let b58 = public_key.to_string();
+                        error!("verify failed for public key {b58} {e:?}")
+                    }
+                    Ok(()) => return Ok(()),
+                };
+            }
+        };
+    }
+
+    return Err(anyhow!("unauthorized"));
 }

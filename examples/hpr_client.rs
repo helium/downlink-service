@@ -48,6 +48,7 @@ async fn main() -> Result {
     };
     fs::write(path, keypair.to_vec())?;
     let b58 = keypair.public_key().to_string();
+
     info!("B58 {b58}");
 
     let port = settings.grpc_listen.port();
@@ -60,7 +61,6 @@ async fn main() -> Result {
     let mut request = HttpRoamingRegisterV1 {
         region: 1,
         timestamp: current_timestamp()?,
-        signer: keypair.public_key().into(),
         signature: vec![],
     };
 
