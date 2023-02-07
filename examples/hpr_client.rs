@@ -50,7 +50,7 @@ async fn main() -> Result {
     let b58 = keypair.public_key().to_string();
     info!("B58 {b58}");
 
-    let port = setings.grpc_listen.port;
+    let port = settings.grpc_listen.port();
     let url = format!("http://127.0.0.1:{}", port);
 
     info!("connecting to {url}");

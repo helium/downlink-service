@@ -19,9 +19,7 @@ async fn main() {
 
     info!("sending fake downlinks every {one_sec:?}");
 
-    let str = settings.http_listen.to_string();
-    let x = str.find(':').unwrap() + 1;
-    let port = &str[x..];
+    let port = settings.http_listen.port();
     let url = format!("http://127.0.0.1:{}/api/downlink", port);
 
     info!("connecting to {url}");
