@@ -103,14 +103,13 @@ async fn main() -> Result {
     }
 
     let authorized_keys = parse_authorized_keys(settings.authorized_keys)?;
-    let state = State::new(authorized_keys)?;
-    let http_state = state.clone();
-    let grpc_state = state.clone();
+    let grpc_state = State::new(authorized_keys)?;
+    let sender = grpc_state.sender.clone();
 
     let http_thread = tokio::spawn(async move {
         let app = Router::new()
             .route("/api/downlink", post(downlink_post))
-            .layer(Extension(http_state));
+            .layer(Extension(sender));
 
         axum::Server::bind(&settings.http_listen)
             .serve(app.into_make_service())
@@ -148,11 +147,14 @@ fn parse_authorized_keys(keys_str: Option<String>) -> Result<Vec<PublicKey>> {
     Ok(authorized_keys)
 }
 
-async fn downlink_post(state: Extension<State>, body: Bytes) -> impl IntoResponse {
+async fn downlink_post(
+    sender: Extension<broadcast::Sender<Bytes>>,
+    body: Bytes,
+) -> impl IntoResponse {
     metrics::increment_counter!("downlink_service_http_downlink_post_hit");
 
     info!("got donwlink via http {body:?}");
-    match state.sender.send(body) {
+    match sender.send(body) {
         Ok(_t) => (StatusCode::ACCEPTED, "Downlink Accepted"),
         Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Downlink Lost"),
     }
