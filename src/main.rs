@@ -15,8 +15,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use std::{
     path::PathBuf,
     str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
@@ -28,7 +27,7 @@ use crate::settings::Settings;
 
 mod settings;
 
-const TWO_MIN: u128 = 2 * 60 * 1000;
+const TWO_MIN: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -40,29 +39,30 @@ pub type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
 
 #[derive(Debug, Clone)]
 struct State {
-    sender: Arc<broadcast::Sender<Bytes>>,
-    authorized_signers: Arc<Vec<PublicKey>>,
+    sender: broadcast::Sender<Bytes>,
+    authorized_signers: Vec<PublicKey>,
 }
 
 impl State {
-    fn with_authorized_keys(authorized_keys: Vec<PublicKey>) -> Result<Self> {
+    fn new(authorized_keys: Vec<PublicKey>) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(128);
 
         Ok(Self {
-            sender: Arc::new(tx),
-            authorized_signers: Arc::new(authorized_keys),
+            sender: tx,
+            authorized_signers: authorized_keys,
         })
     }
 
     fn verify_req(&self, register: &HttpRoamingRegisterV1) -> Result<Option<String>> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        let timestamp = u128::try_from(register.timestamp)?;
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+        let timestamp = Duration::from_millis(register.timestamp);
 
         if timestamp < (now - TWO_MIN) {
-            return Err(anyhow!("timestamp too far in the past"));
+            anyhow::bail!("timestamp too far in the past");
         }
+
         if timestamp > (now + TWO_MIN) {
-            return Err(anyhow!("timestamp too far in the future"));
+            anyhow::bail!("timestamp too far in the future");
         }
 
         if self.authorized_signers.is_empty() {
@@ -74,7 +74,7 @@ impl State {
                 return Ok(Some(pubkey.to_string()));
             }
         }
-        Err(anyhow!("no keys matched"))
+        anyhow::bail!("no keys matched")
     }
 }
 
@@ -103,7 +103,7 @@ async fn main() -> Result {
     }
 
     let authorized_keys = parse_authorized_keys(settings.authorized_keys)?;
-    let state = State::with_authorized_keys(authorized_keys)?;
+    let state = State::new(authorized_keys)?;
     let http_state = state.clone();
     let grpc_state = state.clone();
 
