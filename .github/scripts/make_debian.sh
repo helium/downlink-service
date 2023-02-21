@@ -60,8 +60,7 @@ rm -f /usr/local/bin/downlink_service
 
 run_fpm()
 {
-    local CONF_PATH=$1
-    local VERSION=$2
+    local VERSION=$1
 
     # XXX HACK fpm won't let us mark a config file unless
     # it exists at the specified path
@@ -84,7 +83,7 @@ run_fpm()
         --deb-group helium \
         --config-files /opt/downlink_service/etc/settings.toml \
         target/release/downlink_service=/opt/downlink_service/bin/downlink_service \
-        $CONF_PATH=/opt/downlink_service/etc/settings-example.toml
+        pkg/settings-template.toml=/opt/downlink_service/etc/settings-example.toml
 
     # copy deb to /tmp for upload later
     cp *.deb /tmp
@@ -94,14 +93,11 @@ run_fpm()
 # install fpm
 sudo apt update
 sudo apt install --yes ruby
-sudo gem install fpm -v 1.14.2 # current as of 2022-11-08
+sudo gem install fpm -v 1.15.1 # current as of 2023-02-21
 
-for config_path in $( find . -name 'settings-template.toml' )
-do
-    write_unit_template
-    write_prepost_template
-    run_fpm $config_path $VERSION
-done
+write_unit_template
+write_prepost_template
+run_fpm $VERSION
 
 for deb in /tmp/*.deb
 do
@@ -109,5 +105,5 @@ do
     curl -u "${PACKAGECLOUD_API_KEY}:" \
          -F "package[distro_version_id]=210" \
          -F "package[package_file]=@$deb" \
-         https://packagecloud.io/api/v1/repos/helium/oracles/packages.json
+         https://packagecloud.io/api/v1/repos/helium/package_router/packages.json
 done
