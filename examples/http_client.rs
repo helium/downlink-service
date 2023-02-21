@@ -20,7 +20,7 @@ async fn main() {
     info!("sending fake downlinks every {one_sec:?}");
 
     let port = settings.http_listen.port();
-    let url = format!("http://127.0.0.1:{}/api/downlink", port);
+    let url = format!("http://127.0.0.1:{port}/api/downlink");
 
     info!("connecting to {url}");
 

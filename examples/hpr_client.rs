@@ -52,7 +52,7 @@ async fn main() -> Result {
     info!("B58 {b58}");
 
     let port = settings.grpc_listen.port();
-    let url = format!("http://127.0.0.1:{}", port);
+    let url = format!("http://127.0.0.1:{port}");
 
     info!("connecting to {url}");
 

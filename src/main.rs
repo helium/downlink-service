@@ -136,7 +136,7 @@ fn parse_authorized_keys(keys_str: Option<String>) -> Result<Vec<PublicKey>> {
     let mut authorized_keys = vec![];
     if let Some(authorized_keys_str) = keys_str {
         info!("Authorized keys {authorized_keys_str}");
-        for key in authorized_keys_str.split(",") {
+        for key in authorized_keys_str.split(',') {
             authorized_keys.push(
                 PublicKey::from_str(key).map_err(|e| anyhow!("could not parse {key}: {e:?}"))?,
             );
