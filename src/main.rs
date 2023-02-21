@@ -12,16 +12,22 @@ use helium_proto::{
     Message,
 };
 use metrics_exporter_prometheus::PrometheusBuilder;
-use settings::Settings;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    str::FromStr,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::settings::Settings;
+
 mod settings;
+
+const TWO_MIN: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -33,34 +39,59 @@ pub type Result<T = (), E = anyhow::Error> = anyhow::Result<T, E>;
 
 #[derive(Debug, Clone)]
 struct State {
-    sender: Arc<broadcast::Sender<Bytes>>,
-    settings: Arc<settings::Settings>,
+    sender: broadcast::Sender<Bytes>,
+    authorized_signers: Vec<PublicKey>,
 }
 
 impl State {
-    fn with_settings(settings: Settings) -> Self {
+    fn new(authorized_keys: Vec<PublicKey>) -> Result<Self> {
         let (tx, _rx) = broadcast::channel(128);
-        Self {
-            sender: Arc::new(tx),
-            settings: Arc::new(settings),
+
+        Ok(Self {
+            sender: tx,
+            authorized_signers: authorized_keys,
+        })
+    }
+
+    fn verify_req(&self, register: &HttpRoamingRegisterV1) -> Result<Option<String>> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+        let timestamp = Duration::from_millis(register.timestamp);
+
+        if timestamp < (now - TWO_MIN) {
+            anyhow::bail!("timestamp too far in the past");
         }
+
+        if timestamp > (now + TWO_MIN) {
+            anyhow::bail!("timestamp too far in the future");
+        }
+
+        if self.authorized_signers.is_empty() {
+            return Ok(None);
+        }
+
+        for pubkey in self.authorized_signers.iter() {
+            if register.verify(pubkey).is_ok() {
+                return Ok(Some(pubkey.to_string()));
+            }
+        }
+        anyhow::bail!("no keys matched")
     }
 }
 
 #[tokio::main]
 async fn main() -> Result {
     let cli = Cli::parse();
-
-    let settings = settings::Settings::new(cli.config_file)?;
-    match &settings.authorized_keys {
-        None => warn!("No authorized_keys set"),
-        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys),
-    };
+    let settings = Settings::new(cli.config_file)?;
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(&settings.log))
         .with(tracing_subscriber::fmt::layer())
         .init();
+
+    match &settings.authorized_keys {
+        None => warn!("No authorized_keys set"),
+        Some(authorized_keys) => info!("Authorized keys {}", authorized_keys),
+    };
 
     if let Err(e) = PrometheusBuilder::new()
         .with_http_listener(settings.metrics_listen)
@@ -71,43 +102,59 @@ async fn main() -> Result {
         info!(endpoint = %settings.metrics_listen, "Metrics listening");
     }
 
-    let state = State::with_settings(settings);
-    let http_state = state.clone();
-    let grpc_state = state.clone();
+    let authorized_keys = parse_authorized_keys(settings.authorized_keys)?;
+    let grpc_state = State::new(authorized_keys)?;
+    let sender = grpc_state.sender.clone();
 
     let http_thread = tokio::spawn(async move {
-        let listen = http_state.settings.http_listen;
         let app = Router::new()
             .route("/api/downlink", post(downlink_post))
-            .layer(Extension(http_state));
+            .layer(Extension(sender));
 
-        axum::Server::bind(&listen)
+        axum::Server::bind(&settings.http_listen)
             .serve(app.into_make_service())
             .await
             .unwrap();
     });
-    info!(endpoint = %state.settings.http_listen, "HTTP listening");
+    info!(endpoint = %settings.http_listen, "HTTP listening");
 
     let grpc_thread = tokio::spawn(async move {
-        let listen = grpc_state.settings.grpc_listen;
         tonic::transport::Server::builder()
             .add_service(HttpRoamingServer::new(grpc_state))
-            .serve(listen)
+            .serve(settings.grpc_listen)
             .await
             .unwrap();
     });
-    info!(endpoint = %state.settings.grpc_listen, "GRPC listening");
+    info!(endpoint = %settings.grpc_listen, "GRPC listening");
 
     let _ = tokio::try_join!(http_thread, grpc_thread);
 
     Ok(())
 }
 
-async fn downlink_post(state: Extension<State>, body: Bytes) -> impl IntoResponse {
+fn parse_authorized_keys(keys_str: Option<String>) -> Result<Vec<PublicKey>> {
+    let mut authorized_keys = vec![];
+    if let Some(authorized_keys_str) = keys_str {
+        info!("Authorized keys {authorized_keys_str}");
+        for key in authorized_keys_str.split(',') {
+            authorized_keys.push(
+                PublicKey::from_str(key).map_err(|e| anyhow!("could not parse {key}: {e:?}"))?,
+            );
+        }
+    } else {
+        warn!("No authorized_keys set");
+    }
+    Ok(authorized_keys)
+}
+
+async fn downlink_post(
+    sender: Extension<broadcast::Sender<Bytes>>,
+    body: Bytes,
+) -> impl IntoResponse {
     metrics::increment_counter!("downlink_service_http_downlink_post_hit");
 
     info!("got donwlink via http {body:?}");
-    match state.sender.send(body) {
+    match sender.send(body) {
         Ok(_t) => (StatusCode::ACCEPTED, "Downlink Accepted"),
         Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Downlink Lost"),
     }
@@ -122,79 +169,56 @@ impl http_roaming_server::HttpRoaming for State {
         request: Request<HttpRoamingRegisterV1>,
     ) -> Result<tonic::Response<Self::streamStream>, tonic::Status> {
         let mut http_rx = self.sender.subscribe();
-        let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let roaming_req: HttpRoamingRegisterV1 = request.into_inner();
-        let public_key: PublicKey = match PublicKey::try_from(roaming_req.signer.clone()) {
-            Ok(pubkey) => pubkey,
-            Err(e) => {
-                error!("could not parse pubkey {e:?}");
+        let roaming_req = request.into_inner();
+
+        let b58 = match self.verify_req(&roaming_req) {
+            Ok(None) => {
+                info!("no keys, connected");
+                "all-b58s".to_string()
+            }
+            Ok(Some(b58)) => {
+                info!(b58, "verified and connected");
+                b58
+            }
+            Err(err) => {
+                metrics::increment_counter!("downlink_service_grpc_verify_req_err");
+                warn!("failed to verify: {err:?}");
                 return Err(tonic::Status::permission_denied("unauthorized"));
             }
         };
-        let b58 = public_key.to_string();
 
-        let authorized = match self.settings.authorized_keys.as_ref() {
-            None => true,
-            Some(authotized_keys) => authotized_keys.contains(&b58),
-        };
+        metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
+        let (tx, rx) = tokio::sync::mpsc::channel(20);
+        tokio::spawn(async move {
+            while let Ok(body) = http_rx.recv().await {
+                metrics::increment_counter!("downlink_service_grpc_downlink_hit");
 
-        if authorized {
-            match verify_req(roaming_req, public_key) {
-                Err(err) => {
-                    metrics::increment_counter!("downlink_service_grpc_verify_req_err");
-                    warn!(b58, "failed to verify: {err:?}");
-                    Err(tonic::Status::unauthenticated("failed req verification"))
-                }
-                Ok(()) => {
-                    metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
-                    info!(b58, "verified and connected");
-
-                    tokio::spawn(async move {
-                        while let Ok(body) = http_rx.recv().await {
-                            metrics::increment_counter!("downlink_service_grpc_downlink_hit");
-
-                            info!(b58, "got downlink {body:?} sending");
-                            let sending = HttpRoamingDownlinkV1 { data: body.into() };
-                            if let Err(_) = tx.send(Ok(sending)).await {
-                                break;
-                            }
-                        }
-                        metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
-                        info!(b58, "disconnected");
-                    });
-
-                    Ok(Response::new(ReceiverStream::new(rx)))
+                info!(b58, "got downlink {body:?} sending");
+                let sending = HttpRoamingDownlinkV1 { data: body.into() };
+                if tx.send(Ok(sending)).await.is_err() {
+                    break;
                 }
             }
-        } else {
-            metrics::increment_counter!("downlink_service_grpc_unauthorized_req");
-            warn!(b58, "unauthorized");
-            Err(tonic::Status::permission_denied("unauthorized"))
-        }
+            metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
+            info!(b58, "disconnected");
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
-fn verify_req(mut req: HttpRoamingRegisterV1, public_key: PublicKey) -> Result {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
+pub trait MsgVerify {
+    fn verify(&self, verifier: &PublicKey) -> Result<(), anyhow::Error>;
+}
 
-    let timestamp = u128::try_from(req.timestamp).unwrap();
-    let two_min: u128 = 2 * 60 * 1000;
-
-    if timestamp < (now - two_min) {
-        return Err(anyhow!("timestamp too far in the past"));
+impl MsgVerify for HttpRoamingRegisterV1 {
+    fn verify(&self, verifier: &PublicKey) -> Result<(), anyhow::Error> {
+        let mut buf = vec![];
+        let mut msg = self.clone();
+        msg.signature = vec![];
+        msg.encode(&mut buf)?;
+        verifier
+            .verify(&buf, &self.signature)
+            .map_err(anyhow::Error::from)
     }
-    if timestamp > (now + two_min) {
-        return Err(anyhow!("timestamp too far in the future"));
-    }
-
-    let signature = req.signature;
-    req.signature = vec![];
-    let encoded = &req.encode_to_vec();
-
-    public_key
-        .verify(encoded, &signature)
-        .map_err(|e| anyhow!("invalid signature: {e:?}"))
 }

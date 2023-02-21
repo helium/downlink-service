@@ -1,7 +1,7 @@
 use config::{Config, Environment, File};
 use serde::Deserialize;
-use std::path::Path;
 use std::net::SocketAddr;
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub struct Settings {
@@ -31,7 +31,9 @@ pub fn default_http_listen_addr() -> SocketAddr {
 }
 
 pub fn default_grpc_listen_addr() -> SocketAddr {
-    "0.0.0.0:50051".parse().expect("invalid default socket addr")
+    "0.0.0.0:50051"
+        .parse()
+        .expect("invalid default socket addr")
 }
 
 pub fn default_metrics_listen_addr() -> SocketAddr {
