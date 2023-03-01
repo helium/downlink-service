@@ -24,7 +24,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=/opt/downlink_service/bin/downlink_service -c /opt/downlink_service/etc/settings.toml server
+ExecStart=/opt/downlink_service/bin/downlink_service -c /opt/downlink_service/etc/settings.toml
 User=helium
 PIDFile=/var/run/downlink_service
 Restart=always

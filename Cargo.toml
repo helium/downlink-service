@@ -30,4 +30,4 @@ helium-proto = { git = "https://github.com/helium/proto", branch="master", featu
 helium-crypto = { git = "http://github.com/helium/helium-crypto-rs", tag="v0.5.0"}
 clap = { version = "4.0.32", features = ["derive"] }
 tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.16", default-features=false, features = ["env-filter", "registry", "fmt"] }
