@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use axum::{
-    body::Bytes, http::StatusCode, response::IntoResponse, routing::post, Extension, Router,
+    body::Bytes, http::StatusCode, response::IntoResponse, routing::get, routing::post, Extension, Router,
 };
 use clap::Parser;
 use helium_crypto::{PublicKey, Verify};
@@ -109,6 +109,7 @@ async fn main() -> Result {
     let http_thread = tokio::spawn(async move {
         let app = Router::new()
             .route("/api/downlink", post(downlink_post))
+            .route("/health", get(|| async {"ok"}))
             .layer(Extension(sender));
 
         axum::Server::bind(&settings.http_listen)
