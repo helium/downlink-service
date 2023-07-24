@@ -122,6 +122,8 @@ async fn main() -> Result {
 
     let grpc_thread = tokio::spawn(async move {
         tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(250)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(60)))
             .add_service(HttpRoamingServer::new(grpc_state))
             .serve(settings.grpc_listen)
             .await
