@@ -159,7 +159,7 @@ async fn downlink_post(
 
     info!("got donwlink via http {body:?}");
     match sender.send(body) {
-        Ok(_t) => (StatusCode::ACCEPTED, "Downlink Accepted"),
+        Ok(_t) => (StatusCode::OK, "Downlink Accepted"),
         Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Downlink Lost"),
     }
 }
