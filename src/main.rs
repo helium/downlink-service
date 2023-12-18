@@ -157,7 +157,7 @@ async fn downlink_post(
 ) -> impl IntoResponse {
     metrics::increment_counter!("downlink_service_http_downlink_post_hit");
 
-    info!("got donwlink via http {body:?}");
+    info!("got downlink via http {body:?}");
     match sender.send(body) {
         Ok(_t) => (StatusCode::OK, "Downlink Accepted"),
         Err(_e) => (StatusCode::INTERNAL_SERVER_ERROR, "Downlink Lost"),
@@ -197,9 +197,9 @@ impl http_roaming_server::HttpRoaming for State {
             while let Ok(body) = http_rx.recv().await {
                 metrics::increment_counter!("downlink_service_grpc_downlink_hit");
 
-                info!(b58, "got downlink {body:?} sending");
                 let sending = HttpRoamingDownlinkV1 { data: body.into() };
                 if tx.send(Ok(sending)).await.is_err() {
+                    warn!("failed to send to {b58}");
                     break;
                 }
             }
