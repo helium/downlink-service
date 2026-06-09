@@ -113,10 +113,10 @@ async fn main() -> Result {
             .route("/health", get(|| async { "ok" }))
             .layer(Extension(sender));
 
-        axum::Server::bind(&settings.http_listen)
-            .serve(app.into_make_service())
+        let listener = tokio::net::TcpListener::bind(settings.http_listen)
             .await
             .unwrap();
+        axum::serve(listener, app).await.unwrap();
     });
     info!(endpoint = %settings.http_listen, "HTTP listening");
 
@@ -155,7 +155,7 @@ async fn downlink_post(
     sender: Extension<broadcast::Sender<Bytes>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    metrics::increment_counter!("downlink_service_http_downlink_post_hit");
+    metrics::counter!("downlink_service_http_downlink_post_hit").increment(1);
 
     info!("got downlink via http {body:?}");
     match sender.send(body) {
@@ -185,17 +185,17 @@ impl http_roaming_server::HttpRoaming for State {
                 b58
             }
             Err(err) => {
-                metrics::increment_counter!("downlink_service_grpc_verify_req_err");
+                metrics::counter!("downlink_service_grpc_verify_req_err").increment(1);
                 warn!("failed to verify: {err:?}");
                 return Err(tonic::Status::permission_denied("unauthorized"));
             }
         };
 
-        metrics::increment_gauge!("downlink_service_grpc_connections", 1.0);
+        metrics::gauge!("downlink_service_grpc_connections").increment(1.0);
         let (tx, rx) = tokio::sync::mpsc::channel(20);
         tokio::spawn(async move {
             while let Ok(body) = http_rx.recv().await {
-                metrics::increment_counter!("downlink_service_grpc_downlink_hit");
+                metrics::counter!("downlink_service_grpc_downlink_hit").increment(1);
 
                 let sending = HttpRoamingDownlinkV1 { data: body.into() };
                 if tx.send(Ok(sending)).await.is_err() {
@@ -203,7 +203,7 @@ impl http_roaming_server::HttpRoaming for State {
                     break;
                 }
             }
-            metrics::decrement_gauge!("downlink_service_grpc_connections", 1.0);
+            metrics::gauge!("downlink_service_grpc_connections").decrement(1.0);
             info!(b58, "disconnected");
         });
 
